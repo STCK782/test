@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import '../models/comment.dart';
+import '../models/user.dart';
 import '../services/kintone_service.dart';
 
 class CommentSection extends StatefulWidget {
@@ -14,9 +15,11 @@ class CommentSection extends StatefulWidget {
 class _CommentSectionState extends State<CommentSection> {
   final KintoneService _kintoneService = KintoneService();
   final TextEditingController _commentController = TextEditingController();
+  final TextEditingController _searchController = TextEditingController();
   final ScrollController _scrollController = ScrollController();
 
   List<Comment> _comments = [];
+  List<Mention> _selectedMentions = [];
   bool _isLoading = true;
   bool _isSending = false;
   String? _errorMessage;
@@ -30,6 +33,7 @@ class _CommentSectionState extends State<CommentSection> {
   @override
   void dispose() {
     _commentController.dispose();
+    _searchController.dispose();
     _scrollController.dispose();
     super.dispose();
   }
@@ -43,7 +47,6 @@ class _CommentSectionState extends State<CommentSection> {
         _errorMessage = null;
       });
 
-      // コメント読み込み後、最下部にスクロール
       WidgetsBinding.instance.addPostFrameCallback((_) {
         if (_scrollController.hasClients) {
           _scrollController.animateTo(
@@ -61,24 +64,128 @@ class _CommentSectionState extends State<CommentSection> {
     }
   }
 
+  Future<void> _showUserSearchDialog() async {
+    final searchQuery = _searchController.text.trim();
+
+    // ローディング表示
+    showDialog(
+      context: context,
+      barrierDismissible: false,
+      builder: (context) => const Center(
+        child: Card(
+          child: Padding(
+            padding: EdgeInsets.all(24.0),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                CircularProgressIndicator(),
+                SizedBox(height: 16),
+                Text('ユーザーを検索中...'),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+
+    try {
+      // ユーザー一覧を取得
+      final users = await _kintoneService.getUsers();
+
+      // 検索クエリでフィルタリング
+      final filteredUsers = users
+          .where((user) => user.matches(searchQuery))
+          .toList();
+
+      if (!mounted) return;
+
+      // ローディングを閉じる
+      Navigator.of(context).pop();
+
+      // ユーザー選択ダイアログを表示
+      final selectedUser = await showDialog<KintoneUser>(
+        context: context,
+        builder: (context) => _UserSelectionDialog(
+          users: filteredUsers,
+          searchQuery: searchQuery,
+        ),
+      );
+
+      if (selectedUser != null) {
+        setState(() {
+          // 重複チェック
+          if (!_selectedMentions.any((m) => m.user.code == selectedUser.code)) {
+            _selectedMentions.add(Mention(user: selectedUser));
+          }
+        });
+      }
+    } catch (e) {
+      if (!mounted) return;
+
+      // ローディングを閉じる
+      Navigator.of(context).pop();
+
+      // エラー表示
+      showDialog(
+        context: context,
+        builder: (context) => AlertDialog(
+          title: const Row(
+            children: [
+              Icon(Icons.error_outline, color: Colors.red),
+              SizedBox(width: 8),
+              Text('エラー'),
+            ],
+          ),
+          content: Text('ユーザーの取得に失敗しました。\n\n$e'),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(context).pop(),
+              child: const Text('閉じる'),
+            ),
+          ],
+        ),
+      );
+    }
+  }
+
+  void _removeMention(int index) {
+    setState(() {
+      _selectedMentions.removeAt(index);
+    });
+  }
+
   Future<void> _sendComment() async {
     final text = _commentController.text.trim();
-    if (text.isEmpty) return;
+    if (text.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('コメントを入力してください'),
+          backgroundColor: Colors.orange,
+        ),
+      );
+      return;
+    }
 
     setState(() {
       _isSending = true;
     });
 
     try {
-      await _kintoneService.addComment(widget.recordId, text);
-      _commentController.clear();
+      await _kintoneService.addComment(
+        widget.recordId,
+        text,
+        mentions: _selectedMentions.isNotEmpty ? _selectedMentions : null,
+      );
 
-      // コメント送信後、リストを再読み込み
+      _commentController.clear();
+      setState(() {
+        _selectedMentions.clear();
+      });
+
       await _loadComments();
 
       if (!mounted) return;
 
-      // 成功メッセージ
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
           content: Text('コメントを送信しました'),
@@ -225,18 +332,100 @@ class _CommentSectionState extends State<CommentSection> {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
+                // 宛先検索エリア
+                const Text(
+                  '宛先',
+                  style: TextStyle(fontSize: 12, color: Colors.grey),
+                ),
+                const SizedBox(height: 8),
+                Row(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Expanded(
+                      child: TextField(
+                        controller: _searchController,
+                        decoration: InputDecoration(
+                          hintText: 'ユーザー名で検索...',
+                          border: OutlineInputBorder(
+                            borderRadius: BorderRadius.circular(8),
+                          ),
+                          contentPadding: const EdgeInsets.symmetric(
+                            horizontal: 12,
+                            vertical: 10,
+                          ),
+                        ),
+                        onSubmitted: (_) => _showUserSearchDialog(),
+                      ),
+                    ),
+                    const SizedBox(width: 8),
+                    SizedBox(
+                      width: 80,
+                      height: 40,
+                      child: ElevatedButton(
+                        onPressed: _showUserSearchDialog,
+                        style: ElevatedButton.styleFrom(
+                          backgroundColor: const Color(0xFF3B4A6B),
+                          foregroundColor: Colors.white,
+                          shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(8),
+                          ),
+                        ),
+                        child: const Text('検索'),
+                      ),
+                    ),
+                  ],
+                ),
+
+                // 選択されたメンション表示
+                if (_selectedMentions.isNotEmpty) ...[
+                  const SizedBox(height: 12),
+                  Wrap(
+                    spacing: 8,
+                    runSpacing: 8,
+                    children: _selectedMentions.asMap().entries.map((entry) {
+                      final index = entry.key;
+                      final mention = entry.value;
+                      return Chip(
+                        avatar: CircleAvatar(
+                          backgroundColor: Colors.blue.shade700,
+                          child: Text(
+                            mention.user.name.isNotEmpty
+                                ? mention.user.name[0]
+                                : '?',
+                            style: const TextStyle(
+                              color: Colors.white,
+                              fontSize: 12,
+                            ),
+                          ),
+                        ),
+                        label: Text(mention.user.name),
+                        deleteIcon: const Icon(Icons.close, size: 18),
+                        onDeleted: () => _removeMention(index),
+                        backgroundColor: Colors.blue.shade50,
+                        shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(16),
+                          side: BorderSide(color: Colors.blue.shade200),
+                        ),
+                      );
+                    }).toList(),
+                  ),
+                ],
+
+                const SizedBox(height: 12),
+
+                // コメント入力
                 const Text(
                   'コメント入力欄',
                   style: TextStyle(fontSize: 12, color: Colors.grey),
                 ),
                 const SizedBox(height: 8),
                 Row(
-                  crossAxisAlignment: CrossAxisAlignment.end,
+                  crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
                     Expanded(
                       child: TextField(
                         controller: _commentController,
-                        maxLines: 3,
+                        maxLines: null,
                         minLines: 1,
                         enabled: !_isSending,
                         decoration: InputDecoration(
@@ -246,7 +435,7 @@ class _CommentSectionState extends State<CommentSection> {
                           ),
                           contentPadding: const EdgeInsets.symmetric(
                             horizontal: 12,
-                            vertical: 8,
+                            vertical: 10,
                           ),
                         ),
                         onSubmitted: (_) => _sendComment(),
@@ -295,7 +484,6 @@ class _CommentSectionState extends State<CommentSection> {
       child: Row(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          // アバター
           CircleAvatar(
             backgroundColor: Colors.blue.shade100,
             radius: 20,
@@ -308,7 +496,6 @@ class _CommentSectionState extends State<CommentSection> {
             ),
           ),
           const SizedBox(width: 12),
-          // コメント内容
           Expanded(
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
@@ -348,6 +535,125 @@ class _CommentSectionState extends State<CommentSection> {
             ),
           ),
         ],
+      ),
+    );
+  }
+}
+
+// ユーザー選択ダイアログ
+class _UserSelectionDialog extends StatelessWidget {
+  final List<KintoneUser> users;
+  final String searchQuery;
+
+  const _UserSelectionDialog({required this.users, required this.searchQuery});
+
+  @override
+  Widget build(BuildContext context) {
+    return Dialog(
+      child: Container(
+        width: 500,
+        constraints: const BoxConstraints(maxHeight: 600),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            // ヘッダー
+            Container(
+              padding: const EdgeInsets.all(16),
+              decoration: BoxDecoration(
+                color: const Color(0xFF3B4A6B),
+                borderRadius: const BorderRadius.only(
+                  topLeft: Radius.circular(4),
+                  topRight: Radius.circular(4),
+                ),
+              ),
+              child: Row(
+                children: [
+                  const Icon(Icons.people, color: Colors.white),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: Text(
+                      searchQuery.isEmpty ? 'ユーザー一覧' : '検索結果: "$searchQuery"',
+                      style: const TextStyle(
+                        color: Colors.white,
+                        fontSize: 16,
+                        fontWeight: FontWeight.bold,
+                      ),
+                    ),
+                  ),
+                  IconButton(
+                    icon: const Icon(Icons.close, color: Colors.white),
+                    onPressed: () => Navigator.of(context).pop(),
+                  ),
+                ],
+              ),
+            ),
+
+            // ユーザーリスト
+            if (users.isEmpty)
+              const Padding(
+                padding: EdgeInsets.all(32),
+                child: Column(
+                  children: [
+                    Icon(Icons.search_off, size: 48, color: Colors.grey),
+                    SizedBox(height: 16),
+                    Text(
+                      'ユーザーが見つかりませんでした',
+                      style: TextStyle(color: Colors.grey),
+                    ),
+                  ],
+                ),
+              )
+            else
+              Flexible(
+                child: ListView.builder(
+                  shrinkWrap: true,
+                  itemCount: users.length,
+                  itemBuilder: (context, index) {
+                    final user = users[index];
+                    return ListTile(
+                      leading: CircleAvatar(
+                        backgroundColor: Colors.blue.shade100,
+                        child: Text(
+                          user.name.isNotEmpty ? user.name[0] : '?',
+                          style: TextStyle(
+                            color: Colors.blue.shade700,
+                            fontWeight: FontWeight.bold,
+                          ),
+                        ),
+                      ),
+                      title: Text(user.name),
+                      subtitle: Text(
+                        '${user.code}${user.email.isNotEmpty ? " • ${user.email}" : ""}',
+                        style: TextStyle(
+                          fontSize: 12,
+                          color: Colors.grey.shade600,
+                        ),
+                      ),
+                      onTap: () => Navigator.of(context).pop(user),
+                      hoverColor: Colors.blue.shade50,
+                    );
+                  },
+                ),
+              ),
+
+            // フッター
+            Container(
+              padding: const EdgeInsets.all(16),
+              decoration: BoxDecoration(
+                border: Border(top: BorderSide(color: Colors.grey.shade300)),
+              ),
+              child: Row(
+                mainAxisAlignment: MainAxisAlignment.end,
+                children: [
+                  TextButton(
+                    onPressed: () => Navigator.of(context).pop(),
+                    child: const Text('キャンセル'),
+                  ),
+                ],
+              ),
+            ),
+          ],
+        ),
       ),
     );
   }

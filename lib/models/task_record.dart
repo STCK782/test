@@ -28,6 +28,14 @@ class TaskRecord {
       return json[key]?['value']?.toString() ?? '';
     }
 
+    //日付フォーマット
+    String getDateTime(String key) {
+      String rawDate = json[key]?['value'] ?? '';
+      final dateTime = DateTime.tryParse(rawDate);
+      if (dateTime == null) return '';
+      return '${dateTime.year}/${dateTime.month}/${dateTime.day}  ${dateTime.hour}:${dateTime.minute}';
+    }
+
     // ユーザー選択フィールドから名前を取得
     String getUserName(String key) {
       final userData = json[key]?['value'];
@@ -74,7 +82,7 @@ class TaskRecord {
       taskStatus: getValue('タスクステータス'),
       taskDetail: getPlainText('タスク詳細'),
       workHours: getValue('工数'),
-      dueDate: getValue('対応期限'),
+      dueDate: getDateTime('対応期限'),
       assignee: getUserName('対応者'),
       reviewer: getUserName('レビュー者'),
       projectName: getValue('案件名'),

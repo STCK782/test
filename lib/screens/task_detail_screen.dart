@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'dart:io';
 import '../models/task_record.dart';
 import '../services/kintone_service.dart';
 import '../widgets/comment_section.dart';
@@ -39,6 +40,93 @@ class _TaskDetailScreenState extends State<TaskDetailScreen> {
     }
   }
 
+  Future<void> _downloadFile(AttachmentFile file) async {
+    // ダウンロード中のダイアログを表示
+    showDialog(
+      context: context,
+      barrierDismissible: false,
+      builder: (BuildContext context) {
+        return const Center(
+          child: Card(
+            child: Padding(
+              padding: EdgeInsets.all(24.0),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  CircularProgressIndicator(),
+                  SizedBox(height: 16),
+                  Text('ダウンロード中...'),
+                ],
+              ),
+            ),
+          ),
+        );
+      },
+    );
+
+    try {
+      final filePath = await _kintoneService.downloadFile(
+        file.fileKey,
+        file.name,
+      );
+
+      if (!mounted) return;
+
+      // ダイアログを閉じる
+      Navigator.of(context).pop();
+
+      // 成功メッセージを表示
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('ファイルを保存しました\n$filePath'),
+          backgroundColor: Colors.green,
+          duration: const Duration(seconds: 4),
+          action: SnackBarAction(
+            label: 'フォルダを開く',
+            textColor: Colors.white,
+            onPressed: () async {
+              try {
+                final directory = Directory(filePath).parent.path;
+                // Windowsのエクスプローラーでフォルダを開く
+                await Process.run('explorer', [directory]);
+              } catch (e) {
+                // エラーは無視
+              }
+            },
+          ),
+        ),
+      );
+    } catch (e) {
+      if (!mounted) return;
+
+      // ダイアログを閉じる
+      Navigator.of(context).pop();
+
+      // エラーメッセージを表示
+      showDialog(
+        context: context,
+        builder: (BuildContext context) {
+          return AlertDialog(
+            title: const Row(
+              children: [
+                Icon(Icons.error_outline, color: Colors.red),
+                SizedBox(width: 8),
+                Text('ダウンロードエラー'),
+              ],
+            ),
+            content: Text('ファイルのダウンロードに失敗しました。\n\n$e'),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.of(context).pop(),
+                child: const Text('閉じる'),
+              ),
+            ],
+          );
+        },
+      );
+    }
+  }
+
   Future<void> _deleteRecord() async {
     // 削除確認ダイアログを表示
     final bool? confirmed = await showDialog<bool>(
@@ -50,7 +138,7 @@ class _TaskDetailScreenState extends State<TaskDetailScreen> {
             mainAxisSize: MainAxisSize.min,
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              const Text('このタスクを削除してもよろしいですか？'),
+              const Text('このタスクを削除してもよろしいですか?'),
               const SizedBox(height: 12),
               Container(
                 padding: const EdgeInsets.all(12),
@@ -281,48 +369,66 @@ class _TaskDetailScreenState extends State<TaskDetailScreen> {
       return const Center(child: Text('データが取得できませんでした'));
     }
 
-    return SingleChildScrollView(
-      child: Padding(
-        padding: const EdgeInsets.all(20.0),
-        child: Row(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Expanded(flex: 7, child: _buildMainContent()),
-            const SizedBox(width: 20),
-            Expanded(
-              flex: 3,
-              child: SizedBox(
-                height: MediaQuery.of(context).size.height - 40,
-                child: CommentSection(recordId: widget.recordId),
-              ),
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final availableHeight = constraints.maxHeight;
+
+        return SingleChildScrollView(
+          child: Padding(
+            padding: const EdgeInsets.all(20.0),
+            child: Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Expanded(flex: 7, child: _buildMainContent(availableHeight)),
+                const SizedBox(width: 20),
+                Expanded(
+                  flex: 3,
+                  child: SizedBox(
+                    height: availableHeight - 40,
+                    child: CommentSection(recordId: widget.recordId),
+                  ),
+                ),
+              ],
             ),
-          ],
-        ),
-      ),
+          ),
+        );
+      },
     );
   }
 
-  Widget _buildMainContent() {
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        _buildTaskHeader(),
-        const SizedBox(height: 20),
-        _buildTaskDetails(),
-        const SizedBox(height: 20),
-        _buildAssignmentInfo(),
-        const SizedBox(height: 20),
-        _buildAttachments(),
-        const SizedBox(height: 20),
-        _buildProjectInfo(),
-        const SizedBox(height: 30),
-        _buildActionButtons(),
-      ],
+  Widget _buildMainContent(double availableHeight) {
+    return ConstrainedBox(
+      constraints: BoxConstraints(
+        minHeight: availableHeight - 40, // パディング分を引く
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+        children: [
+          Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              _buildTaskHeader(),
+              const SizedBox(height: 20),
+              _buildTaskDetails(),
+              const SizedBox(height: 20),
+              _buildAssignmentInfo(),
+              const SizedBox(height: 20),
+              _buildAttachments(),
+              const SizedBox(height: 20),
+              _buildProjectInfo(),
+              const SizedBox(height: 20),
+            ],
+          ),
+          _buildActionButtons(),
+        ],
+      ),
     );
   }
 
   Widget _buildTaskHeader() {
     return Container(
+      width: double.infinity,
       padding: const EdgeInsets.all(20),
       decoration: BoxDecoration(
         color: Colors.white,
@@ -397,6 +503,7 @@ class _TaskDetailScreenState extends State<TaskDetailScreen> {
 
   Widget _buildTaskDetails() {
     return Container(
+      width: double.infinity,
       padding: const EdgeInsets.all(20),
       decoration: BoxDecoration(
         color: Colors.white,
@@ -424,6 +531,7 @@ class _TaskDetailScreenState extends State<TaskDetailScreen> {
 
   Widget _buildAssignmentInfo() {
     return Container(
+      width: double.infinity,
       padding: const EdgeInsets.all(20),
       decoration: BoxDecoration(
         color: Colors.white,
@@ -518,6 +626,7 @@ class _TaskDetailScreenState extends State<TaskDetailScreen> {
 
   Widget _buildAttachments() {
     return Container(
+      width: double.infinity,
       padding: const EdgeInsets.all(20),
       decoration: BoxDecoration(
         color: Colors.white,
@@ -546,7 +655,35 @@ class _TaskDetailScreenState extends State<TaskDetailScreen> {
               children: _taskRecord!.attachments.map((file) {
                 return Padding(
                   padding: const EdgeInsets.only(bottom: 8.0),
-                  child: Text(file.name, style: const TextStyle(fontSize: 16)),
+                  child: InkWell(
+                    onTap: () => _downloadFile(file),
+                    child: Row(
+                      children: [
+                        const Icon(
+                          Icons.attach_file,
+                          size: 18,
+                          color: Color(0xFF3B4A6B),
+                        ),
+                        const SizedBox(width: 8),
+                        Expanded(
+                          child: Text(
+                            file.name,
+                            style: const TextStyle(
+                              fontSize: 16,
+                              color: Color(0xFF2196F3),
+                              decoration: TextDecoration.underline,
+                            ),
+                          ),
+                        ),
+                        const SizedBox(width: 8),
+                        const Icon(
+                          Icons.download,
+                          size: 18,
+                          color: Colors.grey,
+                        ),
+                      ],
+                    ),
+                  ),
                 );
               }).toList(),
             ),
@@ -557,6 +694,7 @@ class _TaskDetailScreenState extends State<TaskDetailScreen> {
 
   Widget _buildProjectInfo() {
     return Container(
+      width: double.infinity,
       padding: const EdgeInsets.all(20),
       decoration: BoxDecoration(
         color: Colors.white,
@@ -565,8 +703,6 @@ class _TaskDetailScreenState extends State<TaskDetailScreen> {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          const Text('案件', style: TextStyle(fontSize: 14, color: Colors.grey)),
-          const SizedBox(height: 10),
           IntrinsicHeight(
             child: Row(
               crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -619,58 +755,61 @@ class _TaskDetailScreenState extends State<TaskDetailScreen> {
   }
 
   Widget _buildActionButtons() {
-    return Row(
-      children: [
-        SizedBox(
-          width: 140,
-          height: 45,
-          child: ElevatedButton(
-            onPressed: () => Navigator.of(context).pop(),
-            style: ElevatedButton.styleFrom(
-              backgroundColor: const Color(0xFF3B4A6B),
-              foregroundColor: Colors.white,
-              shape: RoundedRectangleBorder(
-                borderRadius: BorderRadius.circular(8),
+    return SizedBox(
+      width: double.infinity,
+      child: Row(
+        children: [
+          SizedBox(
+            width: 140,
+            height: 45,
+            child: ElevatedButton(
+              onPressed: () => Navigator.of(context).pop(),
+              style: ElevatedButton.styleFrom(
+                backgroundColor: const Color(0xFF3B4A6B),
+                foregroundColor: Colors.white,
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(8),
+                ),
               ),
+              child: const Text('< 戻る', style: TextStyle(fontSize: 16)),
             ),
-            child: const Text('< 戻る', style: TextStyle(fontSize: 16)),
           ),
-        ),
-        const Spacer(),
-        SizedBox(
-          width: 140,
-          height: 45,
-          child: ElevatedButton(
-            onPressed: () {
-              // 編集機能は今回は実装しない
-            },
-            style: ElevatedButton.styleFrom(
-              backgroundColor: const Color(0xFF3B4A6B),
-              foregroundColor: Colors.white,
-              shape: RoundedRectangleBorder(
-                borderRadius: BorderRadius.circular(8),
+          const Spacer(),
+          SizedBox(
+            width: 140,
+            height: 45,
+            child: ElevatedButton(
+              onPressed: () {
+                // 編集機能は今回は実装しない
+              },
+              style: ElevatedButton.styleFrom(
+                backgroundColor: const Color(0xFF3B4A6B),
+                foregroundColor: Colors.white,
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(8),
+                ),
               ),
+              child: const Text('編集ボタン', style: TextStyle(fontSize: 16)),
             ),
-            child: const Text('編集ボタン', style: TextStyle(fontSize: 16)),
           ),
-        ),
-        const SizedBox(width: 16),
-        SizedBox(
-          width: 140,
-          height: 45,
-          child: ElevatedButton(
-            onPressed: _deleteRecord,
-            style: ElevatedButton.styleFrom(
-              backgroundColor: const Color(0xFFD32F2F),
-              foregroundColor: Colors.white,
-              shape: RoundedRectangleBorder(
-                borderRadius: BorderRadius.circular(8),
+          const SizedBox(width: 16),
+          SizedBox(
+            width: 140,
+            height: 45,
+            child: ElevatedButton(
+              onPressed: _deleteRecord,
+              style: ElevatedButton.styleFrom(
+                backgroundColor: const Color(0xFFD32F2F),
+                foregroundColor: Colors.white,
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(8),
+                ),
               ),
+              child: const Text('削除ボタン', style: TextStyle(fontSize: 16)),
             ),
-            child: const Text('削除ボタン', style: TextStyle(fontSize: 16)),
           ),
-        ),
-      ],
+        ],
+      ),
     );
   }
 }
