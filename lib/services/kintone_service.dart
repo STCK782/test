@@ -1,8 +1,6 @@
 import 'dart:convert';
 import 'dart:io';
 import 'package:http/http.dart' as http;
-import 'package:file_picker/file_picker.dart';
-import 'package:path_provider/path_provider.dart';
 import '../env.dart';
 import '../models/task_record.dart';
 import '../models/comment.dart';
@@ -263,6 +261,122 @@ class KintoneService {
     }
   }
 
+  // レコードを更新
+  Future<void> updateRecord(
+    String recordId,
+    Map<String, dynamic> record,
+  ) async {
+    final String? baseUrl = _env.baseUrl;
+    final String? appId = _env.id;
+
+    if (baseUrl == null || appId == null) {
+      throw Exception('環境変数が正しく設定されていません');
+    }
+
+    final uri = Uri.parse(baseUrl + 'record.json');
+
+    try {
+      final headers = _getAuthHeaders();
+      headers['Content-Type'] = 'application/json';
+
+      final response = await http
+          .put(
+            uri,
+            headers: headers,
+            body: json.encode({'app': appId, 'id': recordId, 'record': record}),
+          )
+          .timeout(
+            const Duration(seconds: 10),
+            onTimeout: () {
+              throw Exception('リクエストがタイムアウトしました');
+            },
+          );
+
+      if (response.statusCode != 200) {
+        final errorBody = json.decode(response.body);
+        final code = errorBody['code'] ?? 'UNKNOWN';
+        final message = errorBody['message'] ?? 'エラーが発生しました';
+        throw Exception(
+          'レコードの更新に失敗しました: ${response.statusCode}\ncode = $code\n$message',
+        );
+      }
+    } catch (e) {
+      if (e.toString().contains('Exception:')) {
+        rethrow;
+      }
+      throw Exception('更新API呼び出しエラー: $e');
+    }
+  }
+
+  // 案件アプリからレコードを検索（仮実装 - 案件アプリのIDが必要）
+  Future<List<Map<String, dynamic>>> searchProjects({
+    String? projectNo,
+    String? projectName,
+    String? clientId,
+    String? clientName,
+  }) async {
+    final String? baseUrl = _env.baseUrl;
+    // TODO: 案件アプリのIDを環境変数から取得するか、直接指定
+    const projectAppId = '6'; // 案件アプリのID（要変更）
+
+    if (baseUrl == null) {
+      throw Exception('環境変数が正しく設定されていません');
+    }
+
+    // 検索クエリを構築
+    List<String> queryParts = [];
+    if (projectNo != null && projectNo.isNotEmpty) {
+      queryParts.add('案件No like "$projectNo"');
+    }
+    if (projectName != null && projectName.isNotEmpty) {
+      queryParts.add('案件名 like "$projectName"');
+    }
+    if (clientId != null && clientId.isNotEmpty) {
+      queryParts.add('取引先ID like "$clientId"');
+    }
+    if (clientName != null && clientName.isNotEmpty) {
+      queryParts.add('取引先名 like "$clientName"');
+    }
+
+    final query = queryParts.isEmpty ? '' : queryParts.join(' and ');
+
+    final uri = Uri.parse(baseUrl + 'records.json').replace(
+      queryParameters: {
+        'app': projectAppId,
+        if (query.isNotEmpty) 'query': query,
+      },
+    );
+
+    try {
+      final response = await http
+          .get(uri, headers: _getAuthHeaders())
+          .timeout(
+            const Duration(seconds: 10),
+            onTimeout: () {
+              throw Exception('リクエストがタイムアウトしました');
+            },
+          );
+
+      if (response.statusCode == 200) {
+        final Map<String, dynamic> data = json.decode(response.body);
+        final List<dynamic> recordsJson = data['records'] ?? [];
+        return recordsJson.cast<Map<String, dynamic>>();
+      } else {
+        final errorBody = json.decode(response.body);
+        final code = errorBody['code'] ?? 'UNKNOWN';
+        final message = errorBody['message'] ?? 'エラーが発生しました';
+        throw Exception(
+          '案件の検索に失敗しました: ${response.statusCode}\ncode = $code\n$message',
+        );
+      }
+    } catch (e) {
+      if (e.toString().contains('Exception:')) {
+        rethrow;
+      }
+      throw Exception('案件検索API呼び出しエラー: $e');
+    }
+  }
+
   // ファイルをダウンロード
   Future<String> downloadFile(String fileKey, String fileName) async {
     final String? baseUrl = _env.baseUrl;
@@ -276,7 +390,7 @@ class KintoneService {
     ).replace(queryParameters: {'fileKey': fileKey});
 
     try {
-      // まずファイルをダウンロード
+      // ファイルをダウンロード
       final response = await http
           .get(uri, headers: _getAuthHeaders())
           .timeout(
@@ -288,22 +402,24 @@ class KintoneService {
 
       if (response.statusCode == 200) {
         // Windowsのダウンロードフォルダパスを取得
-        String? downloadsPath;
+        String downloadsPath;
 
         if (Platform.isWindows) {
-          // Windowsの場合は環境変数からダウンロードフォルダを取得
+          // Windows環境変数からユーザープロファイルを取得
           final userProfile = Platform.environment['USERPROFILE'];
-          if (userProfile != null) {
-            downloadsPath = '$userProfile\\Downloads';
+          if (userProfile == null) {
+            throw Exception('ユーザープロファイルが見つかりません');
           }
+          downloadsPath = '$userProfile\\Downloads';
+        } else if (Platform.isMacOS || Platform.isLinux) {
+          // macOS/Linux環境変数からホームディレクトリを取得
+          final home = Platform.environment['HOME'];
+          if (home == null) {
+            throw Exception('ホームディレクトリが見つかりません');
+          }
+          downloadsPath = '$home/Downloads';
         } else {
-          // その他のプラットフォームの場合
-          final directory = await getDownloadsDirectory();
-          downloadsPath = directory?.path;
-        }
-
-        if (downloadsPath == null) {
-          throw Exception('ダウンロードフォルダが見つかりません');
+          throw Exception('サポートされていないプラットフォームです');
         }
 
         // ダウンロードフォルダが存在するか確認
@@ -347,6 +463,58 @@ class KintoneService {
         rethrow;
       }
       throw Exception('ファイルダウンロードAPI呼び出しエラー: $e');
+    }
+  }
+
+  // ファイルをアップロード
+  Future<String> uploadFile(String filePath) async {
+    final String? baseUrl = _env.baseUrl;
+
+    if (baseUrl == null) {
+      throw Exception('環境変数が正しく設定されていません');
+    }
+
+    final uri = Uri.parse(baseUrl + 'file.json');
+    final file = File(filePath);
+
+    if (!file.existsSync()) {
+      throw Exception('ファイルが見つかりません');
+    }
+
+    try {
+      final request = http.MultipartRequest('POST', uri);
+      request.headers.addAll(_getAuthHeaders());
+
+      final fileName = filePath.split(Platform.pathSeparator).last;
+      request.files.add(
+        await http.MultipartFile.fromPath('file', filePath, filename: fileName),
+      );
+
+      final streamedResponse = await request.send().timeout(
+        const Duration(seconds: 60),
+        onTimeout: () {
+          throw Exception('リクエストがタイムアウトしました');
+        },
+      );
+
+      final response = await http.Response.fromStream(streamedResponse);
+
+      if (response.statusCode == 200) {
+        final Map<String, dynamic> data = json.decode(response.body);
+        return data['fileKey'] ?? '';
+      } else {
+        final errorBody = json.decode(response.body);
+        final code = errorBody['code'] ?? 'UNKNOWN';
+        final message = errorBody['message'] ?? 'エラーが発生しました';
+        throw Exception(
+          'ファイルのアップロードに失敗しました: ${response.statusCode}\ncode = $code\n$message',
+        );
+      }
+    } catch (e) {
+      if (e.toString().contains('Exception:')) {
+        rethrow;
+      }
+      throw Exception('ファイルアップロードAPI呼び出しエラー: $e');
     }
   }
 }
