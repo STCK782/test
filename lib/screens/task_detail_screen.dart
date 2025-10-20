@@ -93,9 +93,15 @@ class _TaskDetailScreenState extends State<TaskDetailScreen> {
     _projectNameController.text = _taskRecord!.projectName;
     _clientNameController.text = _taskRecord!.clientName;
 
+    // 案件No・取引先IDをTaskRecordから取得
+    _projectNoController.text = _taskRecord!.projectNo;
+    _clientIdController.text = _taskRecord!.clientId;
+
+    // 添付ファイルのコピー
     _editingAttachments = List.from(_taskRecord!.attachments);
     _newFileKeys.clear();
 
+    // ステータスの初期化
     final statusList = [
       'Open',
       'Waiting',
@@ -111,10 +117,37 @@ class _TaskDetailScreenState extends State<TaskDetailScreen> {
       _selectedStatus = null;
     }
 
+    // 対応者の初期化（名前からユーザーオブジェクトを作成）
+    if (_taskRecord!.assignee.isNotEmpty) {
+      _selectedAssignee = KintoneUser(
+        code: '', // コードは不明だが表示には名前を使用
+        name: _taskRecord!.assignee,
+        email: '',
+      );
+    } else {
+      _selectedAssignee = null;
+    }
+
+    // レビュー者の初期化（名前からユーザーオブジェクトを作成）
+    if (_taskRecord!.reviewer.isNotEmpty) {
+      _selectedReviewer = KintoneUser(
+        code: '', // コードは不明だが表示には名前を使用
+        name: _taskRecord!.reviewer,
+        email: '',
+      );
+    } else {
+      _selectedReviewer = null;
+    }
+
+    // 対応期限をパース
+    _selectedDate = null;
+    _selectedTime = null;
     if (_taskRecord!.dueDate.isNotEmpty) {
       try {
-        final parts = _taskRecord!.dueDate.split(' ');
-        if (parts.length >= 2) {
+        // "2025/10/17  5:49" のような形式をパース（スペースが複数ある場合も対応）
+        final parts = _taskRecord!.dueDate.split(RegExp(r'\s+'));
+        if (parts.isNotEmpty) {
+          // 日付部分
           final dateParts = parts[0].split('/');
           if (dateParts.length == 3) {
             _selectedDate = DateTime(
@@ -123,16 +156,21 @@ class _TaskDetailScreenState extends State<TaskDetailScreen> {
               int.parse(dateParts[2]),
             );
           }
-          final timeParts = parts[1].split(':');
-          if (timeParts.length >= 2) {
-            _selectedTime = TimeOfDay(
-              hour: int.parse(timeParts[0]),
-              minute: int.parse(timeParts[1]),
-            );
+
+          // 時刻部分
+          if (parts.length >= 2) {
+            final timeParts = parts[1].split(':');
+            if (timeParts.length >= 2) {
+              _selectedTime = TimeOfDay(
+                hour: int.parse(timeParts[0]),
+                minute: int.parse(timeParts[1]),
+              );
+            }
           }
         }
       } catch (e) {
         // パースエラーは無視
+        debugPrint('日付パースエラー: $e, 対象: ${_taskRecord!.dueDate}');
       }
     }
   }
@@ -164,9 +202,18 @@ class _TaskDetailScreenState extends State<TaskDetailScreen> {
     try {
       String dueDate = '';
       if (_selectedDate != null && _selectedTime != null) {
-        final dateStr = DateFormat('yyyy/M/d').format(_selectedDate!);
-        final timeStr = '${_selectedTime!.hour}:${_selectedTime!.minute}';
-        dueDate = '$dateStr  $timeStr';
+        // 日時を結合（UTC時間に変換）
+        final combinedDateTime = DateTime(
+          _selectedDate!.year,
+          _selectedDate!.month,
+          _selectedDate!.day,
+          _selectedTime!.hour,
+          _selectedTime!.minute,
+        );
+        // Kintone形式: 2014-01-11T12:00Z (秒なし、UTC)
+        final utcDateTime = combinedDateTime.toUtc();
+        dueDate =
+            '${utcDateTime.year.toString().padLeft(4, '0')}-${utcDateTime.month.toString().padLeft(2, '0')}-${utcDateTime.day.toString().padLeft(2, '0')}T${utcDateTime.hour.toString().padLeft(2, '0')}:${utcDateTime.minute.toString().padLeft(2, '0')}Z';
       }
 
       final attachmentsList = _editingAttachments.map((file) {
@@ -176,32 +223,53 @@ class _TaskDetailScreenState extends State<TaskDetailScreen> {
       final updateData = <String, dynamic>{
         'タスク名': {'value': _taskNameController.text},
         'タスク詳細': {'value': _taskDetailController.text},
-        '工数': {'value': _workHoursController.text},
-        '対応期限': {'value': dueDate},
-        '案件名': {'value': _projectNameController.text},
-        '取引先名': {'value': _clientNameController.text},
+        '工数': {
+          'value': _workHoursController.text.trim().isEmpty
+              ? ''
+              : _workHoursController.text,
+        },
         '添付ファイル': {'value': attachmentsList},
       };
 
+      // 対応期限は値がある場合のみ送信
+      if (dueDate.isNotEmpty) {
+        updateData['対応期限'] = {'value': dueDate};
+      }
+
+      // タスクステータスは値がある場合のみ送信
       if (_selectedStatus != null && _selectedStatus!.isNotEmpty) {
         updateData['タスクステータス'] = {'value': _selectedStatus};
       }
 
+      // 対応者は値がある場合のみ送信
       if (_selectedAssignee != null) {
-        updateData['対応者'] = {
-          'value': [
-            {'code': _selectedAssignee!.code},
-          ],
-        };
+        if (_selectedAssignee!.code.isNotEmpty) {
+          updateData['対応者'] = {
+            'value': [
+              {'code': _selectedAssignee!.code},
+            ],
+          };
+        } else {
+          // codeが空の場合は送信しない（既存値を維持）
+        }
       }
 
+      // レビュー者は値がある場合のみ送信
       if (_selectedReviewer != null) {
-        updateData['レビュー者'] = {
-          'value': [
-            {'code': _selectedReviewer!.code},
-          ],
-        };
+        if (_selectedReviewer!.code.isNotEmpty) {
+          updateData['レビュー者'] = {
+            'value': [
+              {'code': _selectedReviewer!.code},
+            ],
+          };
+        } else {
+          // codeが空の場合は送信しない（既存値を維持）
+        }
       }
+
+      // 案件名・取引先名は常に送信
+      updateData['案件名'] = {'value': _projectNameController.text};
+      updateData['取引先名'] = {'value': _clientNameController.text};
 
       await _kintoneService.updateRecord(widget.recordId, updateData);
 
@@ -461,6 +529,23 @@ class _TaskDetailScreenState extends State<TaskDetailScreen> {
     });
   }
 
+  void _clearProjectInfo() {
+    setState(() {
+      _projectNoController.clear();
+      _projectNameController.clear();
+      _clientIdController.clear();
+      _clientNameController.clear();
+    });
+
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(
+        content: Text('案件情報をクリアしました'),
+        backgroundColor: Colors.grey,
+        duration: Duration(seconds: 1),
+      ),
+    );
+  }
+
   Future<void> _searchProjects() async {
     showDialog(
       context: context,
@@ -623,7 +708,7 @@ class _TaskDetailScreenState extends State<TaskDetailScreen> {
               padding: const EdgeInsets.all(12),
               decoration: BoxDecoration(
                 color: Colors.grey.shade100,
-                borderRadius: BorderRadius.circular(4),
+                borderRadius: BorderRadius.circular(8),
               ),
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
@@ -805,54 +890,80 @@ class _TaskDetailScreenState extends State<TaskDetailScreen> {
       builder: (context, constraints) {
         final availableHeight = constraints.maxHeight;
 
-        return SingleChildScrollView(
-          child: Padding(
-            padding: const EdgeInsets.all(20.0),
-            child: Row(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Expanded(flex: 7, child: _buildMainContent(availableHeight)),
-                const SizedBox(width: 20),
-                Expanded(
-                  flex: 3,
-                  child: SizedBox(
-                    height: availableHeight - 40,
-                    child: CommentSection(recordId: widget.recordId),
-                  ),
+        return Padding(
+          padding: const EdgeInsets.all(20.0),
+          child: Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              // 左側: メインコンテンツ（スクロール可能）
+              Expanded(
+                flex: 7,
+                child: Stack(
+                  children: [
+                    // スクロール可能なコンテンツ
+                    Positioned.fill(
+                      child: SingleChildScrollView(
+                        child: Padding(
+                          padding: const EdgeInsets.only(
+                            bottom: 100,
+                          ), // ボタン分の余白
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              _buildTaskHeader(),
+                              const SizedBox(height: 20),
+                              _buildTaskDetails(),
+                              const SizedBox(height: 20),
+                              _buildAssignmentInfo(),
+                              const SizedBox(height: 20),
+                              _buildAttachments(),
+                              const SizedBox(height: 20),
+                              _buildProjectInfo(),
+                              const SizedBox(height: 20),
+                            ],
+                          ),
+                        ),
+                      ),
+                    ),
+                    // 浮かせたボタン（下部固定）
+                    Positioned(
+                      left: 0,
+                      right: 0,
+                      bottom: 0,
+                      height: 85,
+                      child: Container(
+                        padding: const EdgeInsets.only(top: 30, bottom: 0),
+                        decoration: BoxDecoration(
+                          gradient: LinearGradient(
+                            begin: Alignment.topCenter,
+                            end: Alignment.bottomCenter,
+                            colors: [
+                              const Color(0xFFE8EEF5).withOpacity(0.0),
+                              const Color(0xFFE8EEF5).withOpacity(0.95),
+                              const Color(0xFFE8EEF5),
+                            ],
+                            stops: const [0.0, 0.3, 1.0],
+                          ),
+                        ),
+                        child: _buildActionButtons(),
+                      ),
+                    ),
+                  ],
                 ),
-              ],
-            ),
+              ),
+              const SizedBox(width: 20),
+              // 右側: コメントセクション（固定）
+              Expanded(
+                flex: 3,
+                child: SizedBox(
+                  height: availableHeight - 40,
+                  child: CommentSection(recordId: widget.recordId),
+                ),
+              ),
+            ],
           ),
         );
       },
-    );
-  }
-
-  Widget _buildMainContent(double availableHeight) {
-    return ConstrainedBox(
-      constraints: BoxConstraints(minHeight: availableHeight - 40),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        mainAxisAlignment: MainAxisAlignment.spaceBetween,
-        children: [
-          Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              _buildTaskHeader(),
-              const SizedBox(height: 20),
-              _buildTaskDetails(),
-              const SizedBox(height: 20),
-              _buildAssignmentInfo(),
-              const SizedBox(height: 20),
-              _buildAttachments(),
-              const SizedBox(height: 20),
-              _buildProjectInfo(),
-              const SizedBox(height: 20),
-            ],
-          ),
-          _buildActionButtons(),
-        ],
-      ),
     );
   }
 
@@ -960,7 +1071,7 @@ class _TaskDetailScreenState extends State<TaskDetailScreen> {
                         ),
                         decoration: BoxDecoration(
                           color: const Color(0xFFE8F4FD),
-                          borderRadius: BorderRadius.circular(4),
+                          borderRadius: BorderRadius.circular(8),
                         ),
                         child: Text(
                           _taskRecord!.taskStatus,
@@ -1023,291 +1134,358 @@ class _TaskDetailScreenState extends State<TaskDetailScreen> {
         color: Colors.white,
         borderRadius: BorderRadius.circular(8),
       ),
-      child: Column(
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Row(
-            children: [
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    const Text(
-                      '工数',
-                      style: TextStyle(fontSize: 14, color: Colors.grey),
-                    ),
-                    const SizedBox(height: 8),
-                    _isEditMode
-                        ? TextField(
-                            controller: _workHoursController,
-                            decoration: const InputDecoration(
-                              border: OutlineInputBorder(),
-                              contentPadding: EdgeInsets.all(8),
-                              suffixText: '時間',
+          // 工数
+          Expanded(
+            flex: 1,
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                const Text(
+                  '工数',
+                  style: TextStyle(fontSize: 14, color: Colors.grey),
+                ),
+                const SizedBox(height: 8),
+                _isEditMode
+                    ? SizedBox(
+                        height: 40,
+                        child: TextField(
+                          controller: _workHoursController,
+                          decoration: const InputDecoration(
+                            border: OutlineInputBorder(),
+                            contentPadding: EdgeInsets.symmetric(
+                              horizontal: 12,
+                              vertical: 10,
                             ),
-                            keyboardType: TextInputType.number,
-                          )
-                        : Text(
-                            _taskRecord!.workHours.isEmpty
-                                ? '未設定'
-                                : '${_taskRecord!.workHours}時間',
-                            style: const TextStyle(fontSize: 16),
+                            suffixText: '時間',
                           ),
-                  ],
-                ),
-              ),
-              const SizedBox(width: 16),
-              Expanded(
-                flex: 2,
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    const Text(
-                      '対応期限',
-                      style: TextStyle(fontSize: 14, color: Colors.grey),
-                    ),
-                    const SizedBox(height: 8),
-                    _isEditMode
-                        ? Row(
-                            children: [
-                              Expanded(
-                                child: InkWell(
-                                  onTap: _selectDate,
-                                  child: Container(
-                                    padding: const EdgeInsets.all(8),
-                                    decoration: BoxDecoration(
-                                      border: Border.all(color: Colors.grey),
-                                      borderRadius: BorderRadius.circular(4),
-                                    ),
-                                    child: Text(
-                                      _selectedDate != null
-                                          ? DateFormat(
-                                              'yyyy/M/d',
-                                            ).format(_selectedDate!)
-                                          : '日付を選択',
-                                      style: const TextStyle(fontSize: 14),
-                                    ),
-                                  ),
-                                ),
-                              ),
-                              const SizedBox(width: 8),
-                              Expanded(
-                                child: InkWell(
-                                  onTap: _selectTime,
-                                  child: Container(
-                                    padding: const EdgeInsets.all(8),
-                                    decoration: BoxDecoration(
-                                      border: Border.all(color: Colors.grey),
-                                      borderRadius: BorderRadius.circular(4),
-                                    ),
-                                    child: Text(
-                                      _selectedTime != null
-                                          ? '${_selectedTime!.hour}:${_selectedTime!.minute.toString().padLeft(2, '0')}'
-                                          : '時間を選択',
-                                      style: const TextStyle(fontSize: 14),
-                                    ),
-                                  ),
-                                ),
-                              ),
-                            ],
-                          )
-                        : Text(
-                            _taskRecord!.dueDate.isEmpty
-                                ? '未設定'
-                                : _taskRecord!.dueDate,
-                            style: const TextStyle(fontSize: 16),
-                          ),
-                  ],
-                ),
-              ),
-            ],
+                          keyboardType: TextInputType.number,
+                        ),
+                      )
+                    : Text(
+                        _taskRecord!.workHours.isEmpty
+                            ? '未設定'
+                            : '${_taskRecord!.workHours}時間',
+                        style: const TextStyle(fontSize: 16),
+                      ),
+              ],
+            ),
           ),
-          const SizedBox(height: 16),
-          Row(
-            children: [
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    const Text(
-                      '対応者',
-                      style: TextStyle(fontSize: 14, color: Colors.grey),
-                    ),
-                    const SizedBox(height: 8),
-                    _isEditMode
-                        ? Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: [
-                              Row(
-                                children: [
-                                  Expanded(
-                                    child: TextField(
-                                      controller: _assigneeSearchController,
-                                      decoration: const InputDecoration(
-                                        hintText: 'ユーザー名で検索...',
-                                        border: OutlineInputBorder(),
-                                        contentPadding: EdgeInsets.symmetric(
-                                          horizontal: 12,
-                                          vertical: 10,
+          const SizedBox(width: 16),
+
+          // 対応期限
+          Expanded(
+            flex: 1,
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                const Text(
+                  '対応期限',
+                  style: TextStyle(fontSize: 14, color: Colors.grey),
+                ),
+                const SizedBox(height: 8),
+                _isEditMode
+                    ? Row(
+                        children: [
+                          Expanded(
+                            child: SizedBox(
+                              height: 40,
+                              child: InkWell(
+                                onTap: _selectDate,
+                                child: Container(
+                                  padding: const EdgeInsets.symmetric(
+                                    horizontal: 12,
+                                    vertical: 10,
+                                  ),
+                                  decoration: BoxDecoration(
+                                    border: Border.all(color: Colors.grey),
+                                    borderRadius: BorderRadius.circular(8),
+                                  ),
+                                  child: Row(
+                                    children: [
+                                      const Icon(
+                                        Icons.calendar_today,
+                                        size: 16,
+                                        color: Colors.grey,
+                                      ),
+                                      const SizedBox(width: 8),
+                                      Expanded(
+                                        child: Text(
+                                          _selectedDate != null
+                                              ? DateFormat(
+                                                  'yyyy/M/d',
+                                                ).format(_selectedDate!)
+                                              : '日付',
+                                          style: const TextStyle(fontSize: 14),
                                         ),
                                       ),
-                                      onSubmitted: (_) => _selectUser(true),
-                                    ),
+                                    ],
                                   ),
-                                  const SizedBox(width: 8),
-                                  SizedBox(
-                                    width: 80,
-                                    height: 40,
-                                    child: ElevatedButton(
-                                      onPressed: () => _selectUser(true),
-                                      style: ElevatedButton.styleFrom(
-                                        backgroundColor: const Color(
-                                          0xFF3B4A6B,
-                                        ),
-                                        foregroundColor: Colors.white,
-                                        shape: RoundedRectangleBorder(
-                                          borderRadius: BorderRadius.circular(
-                                            8,
-                                          ),
-                                        ),
-                                      ),
-                                      child: const Text('検索'),
-                                    ),
-                                  ),
-                                ],
+                                ),
                               ),
-                              if (_selectedAssignee != null) ...[
-                                const SizedBox(height: 8),
-                                Chip(
-                                  avatar: CircleAvatar(
-                                    backgroundColor: Colors.blue.shade700,
-                                    child: Text(
-                                      _selectedAssignee!.name[0],
-                                      style: const TextStyle(
-                                        color: Colors.white,
-                                        fontSize: 12,
+                            ),
+                          ),
+                          const SizedBox(width: 8),
+                          Expanded(
+                            child: SizedBox(
+                              height: 40,
+                              child: InkWell(
+                                onTap: _selectTime,
+                                child: Container(
+                                  padding: const EdgeInsets.symmetric(
+                                    horizontal: 12,
+                                    vertical: 10,
+                                  ),
+                                  decoration: BoxDecoration(
+                                    border: Border.all(color: Colors.grey),
+                                    borderRadius: BorderRadius.circular(8),
+                                  ),
+                                  child: Row(
+                                    children: [
+                                      const Icon(
+                                        Icons.access_time,
+                                        size: 16,
+                                        color: Colors.grey,
+                                      ),
+                                      const SizedBox(width: 8),
+                                      Expanded(
+                                        child: Text(
+                                          _selectedTime != null
+                                              ? '${_selectedTime!.hour}:${_selectedTime!.minute.toString().padLeft(2, '0')}'
+                                              : '時間',
+                                          style: const TextStyle(fontSize: 14),
+                                        ),
+                                      ),
+                                    ],
+                                  ),
+                                ),
+                              ),
+                            ),
+                          ),
+                        ],
+                      )
+                    : Text(
+                        _taskRecord!.dueDate.isEmpty
+                            ? '未設定'
+                            : _taskRecord!.dueDate,
+                        style: const TextStyle(fontSize: 16),
+                      ),
+              ],
+            ),
+          ),
+          const SizedBox(width: 16),
+
+          // 対応者
+          Expanded(
+            flex: 1,
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                const Text(
+                  '対応者',
+                  style: TextStyle(fontSize: 14, color: Colors.grey),
+                ),
+                const SizedBox(height: 8),
+                _isEditMode
+                    ? Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          SizedBox(
+                            height: 40,
+                            child: Row(
+                              children: [
+                                Expanded(
+                                  child: TextField(
+                                    controller: _assigneeSearchController,
+                                    decoration: const InputDecoration(
+                                      hintText: '検索...',
+                                      border: OutlineInputBorder(),
+                                      contentPadding: EdgeInsets.symmetric(
+                                        horizontal: 12,
+                                        vertical: 10,
                                       ),
                                     ),
+                                    onSubmitted: (_) => _selectUser(true),
                                   ),
-                                  label: Text(_selectedAssignee!.name),
-                                  deleteIcon: const Icon(Icons.close, size: 18),
-                                  onDeleted: () {
-                                    setState(() {
-                                      _selectedAssignee = null;
-                                    });
-                                  },
-                                  backgroundColor: Colors.blue.shade50,
-                                  shape: RoundedRectangleBorder(
-                                    borderRadius: BorderRadius.circular(16),
-                                    side: BorderSide(
-                                      color: Colors.blue.shade200,
+                                ),
+                                const SizedBox(width: 8),
+                                SizedBox(
+                                  width: 60,
+                                  child: ElevatedButton(
+                                    onPressed: () => _selectUser(true),
+                                    style: ElevatedButton.styleFrom(
+                                      backgroundColor: const Color(0xFF3B4A6B),
+                                      foregroundColor: Colors.white,
+                                      padding: EdgeInsets.zero,
+                                      shape: RoundedRectangleBorder(
+                                        borderRadius: BorderRadius.circular(8),
+                                      ),
+                                    ),
+                                    child: const Text(
+                                      '検索',
+                                      style: TextStyle(fontSize: 12),
                                     ),
                                   ),
                                 ),
                               ],
-                            ],
-                          )
-                        : Text(
-                            _taskRecord!.assignee.isEmpty
-                                ? '未設定'
-                                : _taskRecord!.assignee,
-                            style: const TextStyle(fontSize: 16),
+                            ),
                           ),
-                  ],
-                ),
-              ),
-              const SizedBox(width: 16),
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    const Text(
-                      'レビュー者',
-                      style: TextStyle(fontSize: 14, color: Colors.grey),
-                    ),
-                    const SizedBox(height: 8),
-                    _isEditMode
-                        ? Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: [
-                              Row(
-                                children: [
-                                  Expanded(
-                                    child: TextField(
-                                      controller: _reviewerSearchController,
-                                      decoration: const InputDecoration(
-                                        hintText: 'ユーザー名で検索...',
-                                        border: OutlineInputBorder(),
-                                        contentPadding: EdgeInsets.symmetric(
-                                          horizontal: 12,
-                                          vertical: 10,
-                                        ),
-                                      ),
-                                      onSubmitted: (_) => _selectUser(false),
-                                    ),
+                          if (_selectedAssignee != null) ...[
+                            const SizedBox(height: 8),
+                            Chip(
+                              avatar: CircleAvatar(
+                                backgroundColor: Colors.blue.shade700,
+                                radius: 12,
+                                child: Text(
+                                  _selectedAssignee!.name[0],
+                                  style: const TextStyle(
+                                    color: Colors.white,
+                                    fontSize: 10,
                                   ),
-                                  const SizedBox(width: 8),
-                                  SizedBox(
-                                    width: 80,
-                                    height: 40,
-                                    child: ElevatedButton(
-                                      onPressed: () => _selectUser(false),
-                                      style: ElevatedButton.styleFrom(
-                                        backgroundColor: const Color(
-                                          0xFF3B4A6B,
-                                        ),
-                                        foregroundColor: Colors.white,
-                                        shape: RoundedRectangleBorder(
-                                          borderRadius: BorderRadius.circular(
-                                            8,
-                                          ),
-                                        ),
-                                      ),
-                                      child: const Text('検索'),
-                                    ),
-                                  ),
-                                ],
+                                ),
                               ),
-                              if (_selectedReviewer != null) ...[
-                                const SizedBox(height: 8),
-                                Chip(
-                                  avatar: CircleAvatar(
-                                    backgroundColor: Colors.blue.shade700,
-                                    child: Text(
-                                      _selectedReviewer!.name[0],
-                                      style: const TextStyle(
-                                        color: Colors.white,
-                                        fontSize: 12,
+                              label: Text(
+                                _selectedAssignee!.name,
+                                style: const TextStyle(fontSize: 12),
+                              ),
+                              deleteIcon: const Icon(Icons.close, size: 16),
+                              onDeleted: () {
+                                setState(() {
+                                  _selectedAssignee = null;
+                                });
+                              },
+                              backgroundColor: Colors.blue.shade50,
+                              visualDensity: VisualDensity.compact,
+                              materialTapTargetSize:
+                                  MaterialTapTargetSize.shrinkWrap,
+                              padding: const EdgeInsets.symmetric(
+                                horizontal: 8,
+                                vertical: 0,
+                              ),
+                              shape: RoundedRectangleBorder(
+                                borderRadius: BorderRadius.circular(16),
+                                side: BorderSide(color: Colors.blue.shade200),
+                              ),
+                            ),
+                          ],
+                        ],
+                      )
+                    : Text(
+                        _taskRecord!.assignee.isEmpty
+                            ? '未設定'
+                            : _taskRecord!.assignee,
+                        style: const TextStyle(fontSize: 16),
+                      ),
+              ],
+            ),
+          ),
+          const SizedBox(width: 16),
+
+          // レビュー者
+          Expanded(
+            flex: 1,
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                const Text(
+                  'レビュー者',
+                  style: TextStyle(fontSize: 14, color: Colors.grey),
+                ),
+                const SizedBox(height: 8),
+                _isEditMode
+                    ? Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          SizedBox(
+                            height: 40,
+                            child: Row(
+                              children: [
+                                Expanded(
+                                  child: TextField(
+                                    controller: _reviewerSearchController,
+                                    decoration: const InputDecoration(
+                                      hintText: '検索...',
+                                      border: OutlineInputBorder(),
+                                      contentPadding: EdgeInsets.symmetric(
+                                        horizontal: 12,
+                                        vertical: 10,
                                       ),
                                     ),
+                                    onSubmitted: (_) => _selectUser(false),
                                   ),
-                                  label: Text(_selectedReviewer!.name),
-                                  deleteIcon: const Icon(Icons.close, size: 18),
-                                  onDeleted: () {
-                                    setState(() {
-                                      _selectedReviewer = null;
-                                    });
-                                  },
-                                  backgroundColor: Colors.blue.shade50,
-                                  shape: RoundedRectangleBorder(
-                                    borderRadius: BorderRadius.circular(16),
-                                    side: BorderSide(
-                                      color: Colors.blue.shade200,
+                                ),
+                                const SizedBox(width: 8),
+                                SizedBox(
+                                  width: 60,
+                                  child: ElevatedButton(
+                                    onPressed: () => _selectUser(false),
+                                    style: ElevatedButton.styleFrom(
+                                      backgroundColor: const Color(0xFF3B4A6B),
+                                      foregroundColor: Colors.white,
+                                      padding: EdgeInsets.zero,
+                                      shape: RoundedRectangleBorder(
+                                        borderRadius: BorderRadius.circular(8),
+                                      ),
+                                    ),
+                                    child: const Text(
+                                      '検索',
+                                      style: TextStyle(fontSize: 12),
                                     ),
                                   ),
                                 ),
                               ],
-                            ],
-                          )
-                        : Text(
-                            _taskRecord!.reviewer.isEmpty
-                                ? '未設定'
-                                : _taskRecord!.reviewer,
-                            style: const TextStyle(fontSize: 16),
+                            ),
                           ),
-                  ],
-                ),
-              ),
-            ],
+                          if (_selectedReviewer != null) ...[
+                            const SizedBox(height: 8),
+                            Chip(
+                              avatar: CircleAvatar(
+                                backgroundColor: Colors.blue.shade700,
+                                radius: 12,
+                                child: Text(
+                                  _selectedReviewer!.name[0],
+                                  style: const TextStyle(
+                                    color: Colors.white,
+                                    fontSize: 10,
+                                  ),
+                                ),
+                              ),
+                              label: Text(
+                                _selectedReviewer!.name,
+                                style: const TextStyle(fontSize: 12),
+                              ),
+                              deleteIcon: const Icon(Icons.close, size: 16),
+                              onDeleted: () {
+                                setState(() {
+                                  _selectedReviewer = null;
+                                });
+                              },
+                              backgroundColor: Colors.blue.shade50,
+                              visualDensity: VisualDensity.compact,
+                              materialTapTargetSize:
+                                  MaterialTapTargetSize.shrinkWrap,
+                              padding: const EdgeInsets.symmetric(
+                                horizontal: 8,
+                                vertical: 0,
+                              ),
+                              shape: RoundedRectangleBorder(
+                                borderRadius: BorderRadius.circular(16),
+                                side: BorderSide(color: Colors.blue.shade200),
+                              ),
+                            ),
+                          ],
+                        ],
+                      )
+                    : Text(
+                        _taskRecord!.reviewer.isEmpty
+                            ? '未設定'
+                            : _taskRecord!.reviewer,
+                        style: const TextStyle(fontSize: 16),
+                      ),
+              ],
+            ),
           ),
         ],
       ),
@@ -1344,6 +1522,9 @@ class _TaskDetailScreenState extends State<TaskDetailScreen> {
                       horizontal: 12,
                       vertical: 8,
                     ),
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(8),
+                    ),
                   ),
                 ),
               ],
@@ -1367,7 +1548,7 @@ class _TaskDetailScreenState extends State<TaskDetailScreen> {
                       padding: const EdgeInsets.all(8),
                       decoration: BoxDecoration(
                         border: Border.all(color: Colors.grey.shade300),
-                        borderRadius: BorderRadius.circular(4),
+                        borderRadius: BorderRadius.circular(8),
                       ),
                       child: Row(
                         children: [
@@ -1458,6 +1639,7 @@ class _TaskDetailScreenState extends State<TaskDetailScreen> {
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           if (_isEditMode) ...[
+            // 1行目: 案件No、取引先ID、検索ボタン
             Row(
               children: [
                 Expanded(
@@ -1466,7 +1648,10 @@ class _TaskDetailScreenState extends State<TaskDetailScreen> {
                     decoration: const InputDecoration(
                       labelText: '案件No',
                       border: OutlineInputBorder(),
-                      contentPadding: EdgeInsets.all(8),
+                      contentPadding: EdgeInsets.symmetric(
+                        horizontal: 12,
+                        vertical: 10,
+                      ),
                     ),
                   ),
                 ),
@@ -1477,7 +1662,10 @@ class _TaskDetailScreenState extends State<TaskDetailScreen> {
                     decoration: const InputDecoration(
                       labelText: '取引先ID',
                       border: OutlineInputBorder(),
-                      contentPadding: EdgeInsets.all(8),
+                      contentPadding: EdgeInsets.symmetric(
+                        horizontal: 12,
+                        vertical: 10,
+                      ),
                     ),
                   ),
                 ),
@@ -1490,6 +1678,9 @@ class _TaskDetailScreenState extends State<TaskDetailScreen> {
                     style: ElevatedButton.styleFrom(
                       backgroundColor: const Color(0xFF3B4A6B),
                       foregroundColor: Colors.white,
+                      shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(8),
+                      ),
                     ),
                     child: const Text('検索'),
                   ),
@@ -1497,64 +1688,99 @@ class _TaskDetailScreenState extends State<TaskDetailScreen> {
               ],
             ),
             const SizedBox(height: 16),
+            // 2行目: 案件名、取引先名、入力解除ボタン
+            Row(
+              children: [
+                Expanded(
+                  child: TextField(
+                    controller: _projectNameController,
+                    decoration: const InputDecoration(
+                      labelText: '案件名',
+                      border: OutlineInputBorder(),
+                      contentPadding: EdgeInsets.symmetric(
+                        horizontal: 12,
+                        vertical: 10,
+                      ),
+                    ),
+                  ),
+                ),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: TextField(
+                    controller: _clientNameController,
+                    decoration: const InputDecoration(
+                      labelText: '取引先名',
+                      border: OutlineInputBorder(),
+                      contentPadding: EdgeInsets.symmetric(
+                        horizontal: 12,
+                        vertical: 10,
+                      ),
+                    ),
+                  ),
+                ),
+                const SizedBox(width: 8),
+                SizedBox(
+                  width: 80,
+                  height: 40,
+                  child: OutlinedButton.icon(
+                    onPressed: _clearProjectInfo,
+                    label: const Text('入力解除', style: TextStyle(fontSize: 12)),
+                    style: OutlinedButton.styleFrom(
+                      foregroundColor: Colors.red,
+                      side: const BorderSide(color: Colors.red),
+                      padding: const EdgeInsets.symmetric(horizontal: 8),
+                      shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(8),
+                      ),
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ] else ...[
+            // 表示モード
+            Row(
+              children: [
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      const Text(
+                        '案件名',
+                        style: TextStyle(fontSize: 14, color: Colors.grey),
+                      ),
+                      const SizedBox(height: 8),
+                      Text(
+                        _taskRecord!.projectName.isEmpty
+                            ? '未設定'
+                            : _taskRecord!.projectName,
+                        style: const TextStyle(fontSize: 16),
+                      ),
+                    ],
+                  ),
+                ),
+                const SizedBox(width: 40),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      const Text(
+                        '取引先名',
+                        style: TextStyle(fontSize: 14, color: Colors.grey),
+                      ),
+                      const SizedBox(height: 8),
+                      Text(
+                        _taskRecord!.clientName.isEmpty
+                            ? '未設定'
+                            : _taskRecord!.clientName,
+                        style: const TextStyle(fontSize: 16),
+                      ),
+                    ],
+                  ),
+                ),
+              ],
+            ),
           ],
-          Row(
-            children: [
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    const Text(
-                      '案件名',
-                      style: TextStyle(fontSize: 14, color: Colors.grey),
-                    ),
-                    const SizedBox(height: 8),
-                    _isEditMode
-                        ? TextField(
-                            controller: _projectNameController,
-                            decoration: const InputDecoration(
-                              border: OutlineInputBorder(),
-                              contentPadding: EdgeInsets.all(8),
-                            ),
-                          )
-                        : Text(
-                            _taskRecord!.projectName.isEmpty
-                                ? '未設定'
-                                : _taskRecord!.projectName,
-                            style: const TextStyle(fontSize: 16),
-                          ),
-                  ],
-                ),
-              ),
-              const SizedBox(width: 40),
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    const Text(
-                      '取引先名',
-                      style: TextStyle(fontSize: 14, color: Colors.grey),
-                    ),
-                    const SizedBox(height: 8),
-                    _isEditMode
-                        ? TextField(
-                            controller: _clientNameController,
-                            decoration: const InputDecoration(
-                              border: OutlineInputBorder(),
-                              contentPadding: EdgeInsets.all(8),
-                            ),
-                          )
-                        : Text(
-                            _taskRecord!.clientName.isEmpty
-                                ? '未設定'
-                                : _taskRecord!.clientName,
-                            style: const TextStyle(fontSize: 16),
-                          ),
-                  ],
-                ),
-              ),
-            ],
-          ),
         ],
       ),
     );
@@ -1578,6 +1804,9 @@ class _TaskDetailScreenState extends State<TaskDetailScreen> {
                 style: ElevatedButton.styleFrom(
                   backgroundColor: const Color(0xFF3B4A6B),
                   foregroundColor: Colors.white,
+                  shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(8),
+                  ),
                 ),
                 child: const Text('< 戻る', style: TextStyle(fontSize: 16)),
               ),
@@ -1592,6 +1821,9 @@ class _TaskDetailScreenState extends State<TaskDetailScreen> {
                 style: OutlinedButton.styleFrom(
                   foregroundColor: const Color(0xFF3B4A6B),
                   side: const BorderSide(color: Color(0xFF3B4A6B)),
+                  shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(8),
+                  ),
                 ),
                 child: const Text('キャンセル', style: TextStyle(fontSize: 16)),
               ),
@@ -1605,6 +1837,9 @@ class _TaskDetailScreenState extends State<TaskDetailScreen> {
                 style: ElevatedButton.styleFrom(
                   backgroundColor: Colors.green,
                   foregroundColor: Colors.white,
+                  shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(8),
+                  ),
                 ),
                 child: const Text('保存', style: TextStyle(fontSize: 16)),
               ),
@@ -1618,6 +1853,9 @@ class _TaskDetailScreenState extends State<TaskDetailScreen> {
                 style: ElevatedButton.styleFrom(
                   backgroundColor: const Color(0xFF3B4A6B),
                   foregroundColor: Colors.white,
+                  shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(8),
+                  ),
                 ),
                 child: const Text('編集', style: TextStyle(fontSize: 16)),
               ),
@@ -1631,6 +1869,9 @@ class _TaskDetailScreenState extends State<TaskDetailScreen> {
                 style: ElevatedButton.styleFrom(
                   backgroundColor: const Color(0xFFD32F2F),
                   foregroundColor: Colors.white,
+                  shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(8),
+                  ),
                 ),
                 child: const Text('削除', style: TextStyle(fontSize: 16)),
               ),

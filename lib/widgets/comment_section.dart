@@ -244,7 +244,7 @@ class _CommentSectionState extends State<CommentSection> {
                       borderRadius: BorderRadius.circular(12),
                     ),
                     child: Text(
-                      '${_comments.length}',
+                      '${_comments.length}コメント',
                       style: TextStyle(
                         fontSize: 12,
                         color: Colors.blue.shade700,
@@ -345,7 +345,7 @@ class _CommentSectionState extends State<CommentSection> {
                       child: TextField(
                         controller: _searchController,
                         decoration: InputDecoration(
-                          hintText: 'ユーザー名で検索...',
+                          hintText: 'ユーザー名もしくは名前で検索...',
                           border: OutlineInputBorder(
                             borderRadius: BorderRadius.circular(8),
                           ),
@@ -414,10 +414,6 @@ class _CommentSectionState extends State<CommentSection> {
                 const SizedBox(height: 12),
 
                 // コメント入力
-                const Text(
-                  'コメント入力欄',
-                  style: TextStyle(fontSize: 12, color: Colors.grey),
-                ),
                 const SizedBox(height: 8),
                 Row(
                   crossAxisAlignment: CrossAxisAlignment.start,
@@ -526,10 +522,7 @@ class _CommentSectionState extends State<CommentSection> {
                     color: Colors.grey.shade100,
                     borderRadius: BorderRadius.circular(8),
                   ),
-                  child: Text(
-                    comment.text,
-                    style: const TextStyle(fontSize: 14),
-                  ),
+                  child: _buildCommentText(comment),
                 ),
               ],
             ),
@@ -537,6 +530,103 @@ class _CommentSectionState extends State<CommentSection> {
         ],
       ),
     );
+  }
+
+  // コメントテキストをメンション部分とそれ以外に分けて表示
+  Widget _buildCommentText(Comment comment) {
+    if (comment.mentions.isEmpty) {
+      // メンションがない場合は通常表示
+      return Text(
+        comment.text,
+        style: const TextStyle(fontSize: 14, color: Colors.black87),
+      );
+    }
+
+    // メンション名のリストを作成
+    final mentionNames = comment.mentions
+        .where((m) => m.name.isNotEmpty)
+        .map((m) => m.name)
+        .toList();
+
+    if (mentionNames.isEmpty) {
+      return Text(
+        comment.text,
+        style: const TextStyle(fontSize: 14, color: Colors.black87),
+      );
+    }
+
+    // テキストを分解してメンション部分を強調表示
+    final spans = <InlineSpan>[];
+    String remainingText = comment.text;
+    int currentIndex = 0;
+
+    // 各メンション名をテキスト内から探してハイライト
+    while (currentIndex < remainingText.length) {
+      bool foundMention = false;
+
+      // 現在位置からメンション名を探す
+      for (final mentionName in mentionNames) {
+        if (remainingText.substring(currentIndex).startsWith(mentionName)) {
+          // メンション前のテキストがあれば追加
+          if (currentIndex > 0) {
+            final beforeText = remainingText.substring(0, currentIndex);
+            if (beforeText.isNotEmpty) {
+              spans.add(
+                TextSpan(
+                  text: beforeText,
+                  style: const TextStyle(fontSize: 14, color: Colors.black87),
+                ),
+              );
+            }
+          }
+
+          // メンション部分を追加（@付きで表示）
+          spans.add(
+            TextSpan(
+              text: '@$mentionName',
+              style: TextStyle(
+                fontSize: 14,
+                color: Colors.blue.shade700,
+                fontWeight: FontWeight.bold,
+                backgroundColor: Colors.blue.shade50,
+              ),
+            ),
+          );
+
+          // 処理済み部分を削除
+          remainingText = remainingText.substring(
+            currentIndex + mentionName.length,
+          );
+          currentIndex = 0;
+          foundMention = true;
+          break;
+        }
+      }
+
+      if (!foundMention) {
+        currentIndex++;
+      }
+    }
+
+    // 残りのテキストを追加
+    if (remainingText.isNotEmpty) {
+      spans.add(
+        TextSpan(
+          text: remainingText,
+          style: const TextStyle(fontSize: 14, color: Colors.black87),
+        ),
+      );
+    }
+
+    // スパンが空の場合は通常表示
+    if (spans.isEmpty) {
+      return Text(
+        comment.text,
+        style: const TextStyle(fontSize: 14, color: Colors.black87),
+      );
+    }
+
+    return RichText(text: TextSpan(children: spans));
   }
 }
 
@@ -559,9 +649,9 @@ class _UserSelectionDialog extends StatelessWidget {
             // ヘッダー
             Container(
               padding: const EdgeInsets.all(16),
-              decoration: BoxDecoration(
-                color: const Color(0xFF3B4A6B),
-                borderRadius: const BorderRadius.only(
+              decoration: const BoxDecoration(
+                color: Color(0xFF3B4A6B),
+                borderRadius: BorderRadius.only(
                   topLeft: Radius.circular(4),
                   topRight: Radius.circular(4),
                 ),

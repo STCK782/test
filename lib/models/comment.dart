@@ -3,20 +3,29 @@ class Comment {
   final String text;
   final String createdAt;
   final CommentCreator creator;
+  final List<CommentMention> mentions;
 
   Comment({
     required this.id,
     required this.text,
     required this.createdAt,
     required this.creator,
+    this.mentions = const [],
   });
 
   factory Comment.fromKintoneJson(Map<String, dynamic> json) {
+    // メンション情報を取得
+    final List<dynamic> mentionsJson = json['mentions'] ?? [];
+    final mentions = mentionsJson
+        .map((m) => CommentMention.fromJson(m))
+        .toList();
+
     return Comment(
       id: json['id']?.toString() ?? '',
       text: json['text'] ?? '',
       createdAt: json['createdAt'] ?? '',
       creator: CommentCreator.fromKintoneJson(json['creator'] ?? {}),
+      mentions: mentions,
     );
   }
 
@@ -54,5 +63,21 @@ class CommentCreator {
 
   factory CommentCreator.fromKintoneJson(Map<String, dynamic> json) {
     return CommentCreator(code: json['code'] ?? '', name: json['name'] ?? '不明');
+  }
+}
+
+class CommentMention {
+  final String code;
+  final String type;
+  final String name; // 名前を追加
+
+  CommentMention({required this.code, required this.type, this.name = ''});
+
+  factory CommentMention.fromJson(Map<String, dynamic> json) {
+    return CommentMention(
+      code: json['code'] ?? '',
+      type: json['type'] ?? 'USER',
+      name: json['name'] ?? json['code'] ?? '', // 名前も取得
+    );
   }
 }

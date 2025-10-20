@@ -6,6 +6,8 @@ class TaskRecord {
   final String dueDate;
   final String assignee;
   final String reviewer;
+  final String projectNo;
+  final String clientId;
   final String projectName;
   final String clientName;
   final List<AttachmentFile> attachments;
@@ -18,6 +20,8 @@ class TaskRecord {
     required this.dueDate,
     required this.assignee,
     required this.reviewer,
+    required this.projectNo,
+    required this.clientId,
     required this.projectName,
     required this.clientName,
     required this.attachments,
@@ -33,7 +37,7 @@ class TaskRecord {
       String rawDate = json[key]?['value'] ?? '';
       final dateTime = DateTime.tryParse(rawDate);
       if (dateTime == null) return '';
-      return '${dateTime.year}/${dateTime.month}/${dateTime.day}  ${dateTime.hour}:${dateTime.minute}';
+      return '${dateTime.year}/${dateTime.month}/${dateTime.day}  ${dateTime.hour}:${dateTime.minute.toString().padLeft(2, '0')}';
     }
 
     // ユーザー選択フィールドから名前を取得
@@ -85,6 +89,8 @@ class TaskRecord {
       dueDate: getDateTime('対応期限'),
       assignee: getUserName('対応者'),
       reviewer: getUserName('レビュー者'),
+      projectNo: getValue('案件No'),
+      clientId: getValue('取引先ID'),
       projectName: getValue('案件名'),
       clientName: getValue('取引先名'),
       attachments: getAttachments(),

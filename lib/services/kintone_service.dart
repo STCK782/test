@@ -130,34 +130,62 @@ class KintoneService {
       throw Exception('環境変数が正しく設定されていません');
     }
 
-    final uri = Uri.parse(baseUrl + 'record/comments.json').replace(
-      queryParameters: {'app': appId, 'record': recordId, 'order': 'asc'},
-    );
+    List<Comment> allComments = [];
+    int offset = 0;
+    const int batchSize = 10; // Kintoneのデフォルト取得件数
+    bool hasMore = true;
 
     try {
-      final response = await http
-          .get(uri, headers: _getAuthHeaders())
-          .timeout(
-            const Duration(seconds: 10),
-            onTimeout: () {
-              throw Exception('リクエストがタイムアウトしました');
-            },
-          );
-
-      if (response.statusCode == 200) {
-        final Map<String, dynamic> data = json.decode(response.body);
-        final List<dynamic> commentsJson = data['comments'] ?? [];
-        return commentsJson
-            .map((json) => Comment.fromKintoneJson(json))
-            .toList();
-      } else {
-        final errorBody = json.decode(response.body);
-        final code = errorBody['code'] ?? 'UNKNOWN';
-        final message = errorBody['message'] ?? 'エラーが発生しました';
-        throw Exception(
-          'コメントの取得に失敗しました: ${response.statusCode}\ncode = $code\n$message',
+      while (hasMore) {
+        final uri = Uri.parse(baseUrl + 'record/comments.json').replace(
+          queryParameters: {
+            'app': appId,
+            'record': recordId,
+            'order': 'asc',
+            'offset': offset.toString(),
+          },
         );
+
+        final response = await http
+            .get(uri, headers: _getAuthHeaders())
+            .timeout(
+              const Duration(seconds: 10),
+              onTimeout: () {
+                throw Exception('リクエストがタイムアウトしました');
+              },
+            );
+
+        if (response.statusCode == 200) {
+          final Map<String, dynamic> data = json.decode(response.body);
+          final List<dynamic> commentsJson = data['comments'] ?? [];
+
+          if (commentsJson.isEmpty) {
+            // コメントがない場合は終了
+            hasMore = false;
+          } else {
+            final comments = commentsJson
+                .map((json) => Comment.fromKintoneJson(json))
+                .toList();
+            allComments.addAll(comments);
+
+            // 取得件数がbatchSizeより少ない場合は最後のページ
+            if (commentsJson.length < batchSize) {
+              hasMore = false;
+            } else {
+              offset += batchSize;
+            }
+          }
+        } else {
+          final errorBody = json.decode(response.body);
+          final code = errorBody['code'] ?? 'UNKNOWN';
+          final message = errorBody['message'] ?? 'エラーが発生しました';
+          throw Exception(
+            'コメントの取得に失敗しました: ${response.statusCode}\ncode = $code\n$message',
+          );
+        }
       }
+
+      return allComments;
     } catch (e) {
       if (e.toString().contains('Exception:')) {
         rethrow;
@@ -317,7 +345,7 @@ class KintoneService {
   }) async {
     final String? baseUrl = _env.baseUrl;
     // TODO: 案件アプリのIDを環境変数から取得するか、直接指定
-    const projectAppId = '6'; // 案件アプリのID（要変更）
+    const projectAppId = '7'; // 案件アプリのID（要変更）
 
     if (baseUrl == null) {
       throw Exception('環境変数が正しく設定されていません');
